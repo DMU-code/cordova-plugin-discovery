@@ -128,7 +128,7 @@ public class cordovaSSDP extends CordovaPlugin {
                         device.put("LOCATION", parseHeaderValue(message, "LOCATION"));
                         device.put("ST", parseHeaderValue(message, "ST"));
                         device.put("Server", parseHeaderValue(message, "Server"));
-                        //createServiceObjWithXMLData(parseHeaderValue(message, "LOCATION"), device);
+                        mDeviceList.put(device);
                     } catch (JSONException e) {
                         e.printStackTrace();
                     }
