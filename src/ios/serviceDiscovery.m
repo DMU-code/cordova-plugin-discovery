@@ -6,6 +6,7 @@
 
 
 #import "serviceDiscovery.h"
+#import "GCDAsyncUdpSocket.h"
 
 NSMutableArray *serviceArr;
 
@@ -53,9 +54,32 @@ NSMutableArray *serviceArr;
                     broadcastAddr.sin_family = AF_INET;
                     inet_pton(AF_INET, "239.255.255.250", &broadcastAddr.sin_addr);
                     broadcastAddr.sin_port = htons(1900);
+                    
+                    
+                    //multicast group join
+                    GCDAsyncUdpSocket *udpSocket = [[GCDAsyncUdpSocket alloc] initWithDelegate:self delegateQueue:dispatch_get_main_queue()];
+                    NSError *error = nil;
+                    if (![udpSocket bindToPort:5555 error:&error])
+                    {
+                        NSLog(@"Error binding to port: %@", error);
+                        return;
+                    }
+                    if(![udpSocket joinMulticastGroup:@"239.255.255.250" error:&error]){
+                        NSLog(@"Error connecting to multicast group: %@", error);
+                        return;
+                    }
+                    if (![udpSocket beginReceiving:&error])
+                    {
+                        NSLog(@"Error receiving: %@", error);
+                        return;
+                    }
+                    NSLog(@"Socket Ready");
+                    //sleep(1);
 
                     // Send the broadcast request for the given service type
-                    NSString *request = [[@"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nST: " stringByAppendingString:serviceType] stringByAppendingString:@"\r\nMX: 2\r\n\r\n"];                    char *requestStr = [request UTF8String];
+                    NSString *request = [[@"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nST: " stringByAppendingString:serviceType] stringByAppendingString:@"\r\nMX: 2\r\n\r\n"];
+                    
+                    char *requestStr = [request UTF8String];
 
                     ret = sendto(sd, requestStr, strlen(requestStr), 0, (struct sockaddr*)&broadcastAddr, sizeof broadcastAddr);
                     if (ret < 0) {
@@ -71,9 +95,9 @@ NSMutableArray *serviceArr;
 
                         NSLog(@"recv: On to listening");
 
-                        // set timeout to 2 seconds.
+                        // set timeout to 4 seconds.
                         struct timeval timeV;
-                        timeV.tv_sec = 2;
+                        timeV.tv_sec = 4;
                         timeV.tv_usec = 0;
 
                         if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &timeV, sizeof(timeV)) == -1) {
@@ -99,7 +123,7 @@ NSMutableArray *serviceArr;
                                 ssize_t result = recvfrom(sd, buf, bufSize, 0,
                                                           (struct sockaddr *)&receiveSockaddr,
                                                           (socklen_t *)&receiveSockaddrLen);
-//                                NSLog(@"got sthing:%ld", result);
+                                //NSLog(@"got sthing:%ld", result);
 
                                 if (result < 0)
                                 {
@@ -135,7 +159,7 @@ NSMutableArray *serviceArr;
  */
 - (void)processResponse:(NSString *)message
 {
-//    NSLog(@"%@", message);
+    NSLog(@"%@", message);
     
     NSArray *msgLines = [message componentsSeparatedByString:@"\r"];
 
@@ -146,7 +170,7 @@ NSMutableArray *serviceArr;
     int i = 0;
     for (i = 0; i < [msgLines count]; i++)
     {
-     //   NSLog(@"working on:%@", msgLines[i]);
+        NSLog(@"working on:%@", msgLines[i]);
         NSRange range = [msgLines[i] rangeOfString:@":"];
 
         if(range.length == 1){

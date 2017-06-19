@@ -41,6 +41,8 @@
 
     <header-file src="src/ios/serviceDiscovery.h" />
     <source-file src="src/ios/serviceDiscovery.m" />
+    <header-file src="src/ios/GCDAsyncUdpSocket.h" />
+    <source-file src="src/ios/GCDAsyncUdpSocket.m" />
   </platform>
 
 
