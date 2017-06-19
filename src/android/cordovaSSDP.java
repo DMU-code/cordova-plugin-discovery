@@ -11,8 +11,11 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
+import java.net.NetworkInterface;
+import java.net.SocketException;
 import java.net.SocketTimeoutException;
 
+import java.util.Enumeration;
 import java.util.Scanner;
 import java.io.IOException;
 
@@ -77,6 +80,24 @@ public class cordovaSSDP extends CordovaPlugin {
         final int SSDP_SEARCH_PORT = 1901;
         final String SSDP_IP = "239.255.255.250";
         int TIMEOUT = 3000;
+        NetworkInterface mNetIf;
+        InetAddress localInAddress = InetAddress.getLocalHost();
+
+        try {
+            for (Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces(); en.hasMoreElements();) {
+                NetworkInterface intf = en.nextElement();
+                for (Enumeration<InetAddress> enumIpAddr = intf.getInetAddresses(); enumIpAddr.hasMoreElements();) {
+                    InetAddress inetAddress = enumIpAddr.nextElement();
+                    if (!inetAddress.isLoopbackAddress() && !inetAddress.isLinkLocalAddress() && inetAddress.isSiteLocalAddress()) {
+                        localInAddress = inetAddress;
+                    }
+                }
+            }
+        } catch (SocketException ex) {
+            System.out.println("LOG_TAG" + ex.toString());
+        }
+
+        mNetIf = NetworkInterface.getByInetAddress(localInAddress);
 
         InetSocketAddress srcAddress = new InetSocketAddress(SSDP_SEARCH_PORT);
         InetSocketAddress dstAddress = new InetSocketAddress(InetAddress.getByName(SSDP_IP), SSDP_PORT);
@@ -100,14 +121,21 @@ public class cordovaSSDP extends CordovaPlugin {
 
         // Send multi-cast packet
         MulticastSocket multicast = null;
+        InetSocketAddress mSSDPMulticastGroup = new InetSocketAddress(SSDP_IP, SSDP_PORT);
         try {
-            multicast = new MulticastSocket(null);
-            multicast.bind(srcAddress);
-            multicast.setTimeToLive(4);
+            //multicast = new MulticastSocket(null);
+            multicast = new MulticastSocket(mSSDPMulticastGroup);
+            //mNetIf = NetworkInterface.getByInetAddress(localInAddress);
+            InetAddress serverAddr = InetAddress.getByName(SSDP_IP);
+
+            //multicast.joinGroup(mSSDPMulticastGroup, mNetIf);
+            multicast.joinGroup(serverAddr);
+            //multicast.bind(srcAddress);
+
+            multicast.setTimeToLive(2);
             multicast.send(discoveryPacket);
-        } finally {
-            multicast.disconnect();
-            multicast.close();
+        } catch (SocketException e){
+            e.printStackTrace();
         }
 
         // Create a socket and wait for the response
@@ -141,6 +169,12 @@ public class cordovaSSDP extends CordovaPlugin {
             if (wildSocket != null) {
                 wildSocket.disconnect();
                 wildSocket.close();
+            }
+
+            if (multicast != null) {
+                multicast.leaveGroup(mSSDPMulticastGroup, mNetIf);
+                //multicast.disconnect();
+                multicast.close();
             }
         }
     }
