@@ -62,7 +62,11 @@ NSMutableArray *serviceArr;
                     if (![udpSocket bindToPort:5555 error:&error])
                     {
                         NSLog(@"Error binding to port: %@", error);
-                        return;
+                        if (![udpSocket bindToPort:5500 error:&error])
+                        {
+                            NSLog(@"Error binding to port: %@", error);
+                            return;
+                        }
                     }
                     if(![udpSocket joinMulticastGroup:@"239.255.255.250" error:&error]){
                         NSLog(@"Error connecting to multicast group: %@", error);
