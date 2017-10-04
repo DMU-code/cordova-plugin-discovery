@@ -29,20 +29,29 @@ Edit `www/js/index.js` and add the following code inside `onDeviceReady`
     
     var success = function(devices) {
         console.log(devices);
-    }
+    };
     
-    var failure = function() {
-        alert("Error calling Service Discovery Plugin");
-    }
+    var failure = function(error) {
+        alert("Error calling Service Discovery Plugin: " + error);
+    };
     
     /**
 	 * Similar to the W3C specification for Network Service Discovery api 'http://www.w3.org/TR/discovery-api/'
-	 * @method getNetworkServices
+	 * @method listen
 	 * @param {String} serviceType e.g. "urn:schemas-upnp-org:service:ContentDirectory:1", "ssdp:all", "urn:schemas-upnp-org:service:AVTransport:1"
-	 * @param {Function} success callback an array of services
+	 * @param {Function} success callback an object of services, indexed by their URNs.
 	 * @param {Function} failure callback 
 	*/
-    serviceDiscovery.getNetworkServices(serviceType, success, failure);
+    serviceDiscovery.listen(serviceType, success, failure);
+    
+    setTimeout(
+        function() {
+            serviceDiscovery.stop(function() {
+                console.log('Service Discovery stopped.');
+            });
+        },
+        16000
+    );
 ```
 
 

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <plugin xmlns="http://www.phonegap.com/ns/plugins/1.0"
         id="com.scott.serviceDiscovery"
-        version="0.2.0">
+        version="1.0.0">
 
   <name>serviceDiscovery</name>
 
@@ -20,29 +20,24 @@
   <platform name="android">
 
     <config-file target="res/xml/config.xml" parent="/*">
-      <feature name="serviceDiscovery">
-        <param name="android-package" value="com.scott.plugin.serviceDiscovery"/>
+      <feature name="ServiceDiscovery">
+        <param name="android-package" value="com.scott.plugin.ServiceDiscovery"/>
       </feature>
     </config-file>
 
-    <source-file src="src/android/serviceDiscovery.java" target-dir="src/com/scott/plugin/"/>
-    <source-file src="src/android/cordovaSSDP.java" target-dir="src/com/scott/plugin/"/>
-    <!-- Requires 3rd party HTTP lib -->
-    <framework src="com.loopj.android:android-async-http:1.4.9" />
+    <source-file src="src/android/ServiceDiscovery.java" target-dir="src/com/scott/plugin/"/>
   </platform>
 
   <!-- ios -->
   <platform name="ios">
     <config-file target="config.xml" parent="/*">
-        <feature name="serviceDiscovery">
-          <param name="ios-package" value="serviceDiscovery" onload="true" />
-        </feature>
+      <feature name="serviceDiscovery">
+        <param name="ios-package" value="ServiceDiscovery" onload="true" />
+      </feature>
     </config-file>
 
-    <header-file src="src/ios/serviceDiscovery.h" />
-    <source-file src="src/ios/serviceDiscovery.m" />
+    <header-file src="src/ios/ServiceDiscovery.h" />
+    <source-file src="src/ios/ServiceDiscovery.m" />
   </platform>
-
-
 
 </plugin>
