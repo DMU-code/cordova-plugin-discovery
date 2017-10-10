@@ -1,5 +1,5 @@
 /**
- Implementation for SSDP service discovery. It sends a message on the standardized broadcast
+ Implementation for SSDP service discovery. Sends a message on the standardized broadcast
  address/port and listens to the responses. The service type to be looked up
  is provided by the user.
  */
@@ -12,10 +12,12 @@ static NSInteger PORT = 1900;
 static size_t bufferSize = 9216;
 
 NSString * volatile callbackId;
+NSString * volatile serviceType;
+BOOL normalizeHeaders;
+struct timeval timeout;
 int sd;
 struct sockaddr_in broadcastAddr;
 volatile BOOL backgroundThreadActive;
-struct timeval timeout;
 volatile NSMutableDictionary *oldAnswers;
 
 
@@ -28,17 +30,13 @@ volatile NSMutableDictionary *oldAnswers;
 
  Initializes some needed variables.
  */
-- (void)pluginInitialize
+- (void) pluginInitialize
 {
     // Configure the broadcast IP and port.
     memset(&broadcastAddr, 0, sizeof broadcastAddr);
     broadcastAddr.sin_family = AF_INET;
     inet_pton(AF_INET, [ADDRESS UTF8String], &broadcastAddr.sin_addr);
     broadcastAddr.sin_port = htons(PORT);
-
-    // set read timeout to 4 seconds.
-    timeout.tv_sec = 4;
-    timeout.tv_usec = 0;
 
     oldAnswers = [@{} mutableCopy];
 }
@@ -48,7 +46,7 @@ volatile NSMutableDictionary *oldAnswers;
 
  Tells an eventually running background thread to give up working by removing the callbackId.
  */
-- (void)onReset
+- (void) onReset
 {
     callbackId = nil;
 }
@@ -64,8 +62,8 @@ volatile NSMutableDictionary *oldAnswers;
  This will continuously send out a SSDP "M-SEARCH" discovery request and then listen for answers
  - basically forever or until the page is left or reloaded.
 
- Your JavaScript success callback will possibly receive multiple callbacks (each with a new set of
- server answers) until all available servers have answered.
+ Your JavaScript success callback will receive multiple callbacks (each with a new server answer)
+ until all available servers have answered.
 
  Different errors in networking can happen which will call the error callback argument of your
  JavaScript call. Errors don't mean, that this plugin will stop listening. You have to explicitly
@@ -78,20 +76,39 @@ volatile NSMutableDictionary *oldAnswers;
 
  @see -stop:
  */
-- (void)listen: (CDVInvokedUrlCommand*)command
+- (void) listen:(CDVInvokedUrlCommand*)command
 {
     callbackId = command.callbackId;
 
-    // Remove old answers, so we can give back everything again to the new listener.
-    [oldAnswers removeAllObjects];
-
-    NSString* serviceType = command.arguments[0];
+    serviceType = command.arguments[0];
     if ([serviceType length] < 1)
     {
         [self error:@"serviceType must not be an empty string!"];
         callbackId = nil;
         return;
     }
+
+    normalizeHeaders = command.arguments.count > 1 && [command.arguments[1] boolValue];
+
+    // Remove old answers, so we can give back everything again to the new listener.
+    [oldAnswers removeAllObjects];
+
+    if (command.arguments.count > 2)
+    {
+        NSInteger to = [command.arguments[2] integerValue];
+        timeout.tv_sec = to / 1000;
+        timeout.tv_usec = (to % 1000) /* rest */ * 1000 /* microseconds */;
+    }
+    else {
+        // set default read timeout to 4 seconds.
+        timeout.tv_sec = 4;
+        timeout.tv_usec = 0;
+    }
+
+    NSLog(@"ServiceDiscovery#listen {serviceType=\"%@\", normalizeHeaders=%@, timeout=%ld, backgroundThreadActive=%@}",
+          serviceType, normalizeHeaders ? @"YES" : @"NO",
+          (timeout.tv_sec * 1000000 + timeout.tv_usec) / 1000,
+          backgroundThreadActive ? @"YES" : @"NO");
 
     // We want to have exaclty one background thread running.
     if (backgroundThreadActive)
@@ -104,31 +121,20 @@ volatile NSMutableDictionary *oldAnswers;
 
         while (callbackId)
         {
-            // Keep loop frequency below 1/s.
-            [NSThread sleepForTimeInterval:1];
-
-            if (![self broadcast:serviceType])
+            if (![self broadcast])
             {
+                // Keep loop frequency below 1/s.
+                [NSThread sleepForTimeInterval:1];
+
                 continue;
             }
 
-            if (![self enableListen])
+            if (![self receive])
             {
+                // Keep loop frequency below 1/s.
+                [NSThread sleepForTimeInterval:1];
+
                 continue;
-            }
-
-            NSMutableDictionary *newAnswers = [self receive];
-            [newAnswers removeObjectsForKeys:[oldAnswers allKeys]];
-
-            // Extra check here - receive can take a while and it could be, that we got
-            // cancelled in the meantime.
-            if (callbackId) {
-                [self.commandDelegate sendPluginResult:[CDVPluginResult
-                                                        resultWithStatus:CDVCommandStatus_OK
-                                                        messageAsDictionary:newAnswers]
-                                            callbackId:callbackId];
-
-                [oldAnswers addEntriesFromDictionary:newAnswers];
             }
         }
 
@@ -142,15 +148,18 @@ volatile NSMutableDictionary *oldAnswers;
  Stops listening for SSDP server discovery answers.
 
  You will immediately stop receiving updates to your listener. The background thread will be
- stopped within 4 seconds (the read timeout).
+ stopped after read timeout. (4 seconds per default).
 
  It is safe to call this multiple times and before any call to -listen:.
 
  @param command The reference to Cordova's JavaScript side.
  */
-- (void)stop: (CDVInvokedUrlCommand*)command
+- (void) stop:(CDVInvokedUrlCommand*)command
 {
     callbackId = nil;
+
+    NSLog(@"ServiceDiscovery#stop {backgroundThreadActive=%@}",
+          backgroundThreadActive ? @"YES" : @"NO");
 
     [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK]
                                 callbackId:command.callbackId];
@@ -161,7 +170,7 @@ volatile NSMutableDictionary *oldAnswers;
 /**
  Logs an error message and sends an error containing that message to the last caller of -listen:.
 
- @params message The error message.
+ @param message The error message.
 
  @see -listen:
  */
@@ -171,9 +180,47 @@ volatile NSMutableDictionary *oldAnswers;
 
     if (callbackId)
     {
-        [self.commandDelegate sendPluginResult:[CDVPluginResult
-                                                resultWithStatus:CDVCommandStatus_ERROR
-                                                messageAsString:message] callbackId:callbackId];
+        CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
+                                                messageAsString:message];
+        [result setKeepCallbackAsBool:YES];
+
+        [self.commandDelegate sendPluginResult:result callbackId:callbackId];
+    }
+}
+
+/**
+ Sends the answer of a server to a M-SEARCH request to the callback of the last caller of -listen:,
+ if it doesn't contain a USN or if the USN was not seen before.
+
+ @param answer A dictionary containing the answer of an SSDP server.
+ */
+- (void) result:(NSDictionary *)answer
+{
+    if (callbackId && answer)
+    {
+        NSString *usn;
+
+        for (NSString *k in [answer allKeys]) {
+            if ([k caseInsensitiveCompare:@"USN"] == NSOrderedSame)
+            {
+                usn = answer[k];
+                break;
+            }
+        }
+
+        if (!usn || !oldAnswers[usn])
+        {
+            CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
+                                       messageAsDictionary:answer];
+            [result setKeepCallbackAsBool:YES];
+
+            [self.commandDelegate sendPluginResult:result callbackId:callbackId];
+
+            if (usn)
+            {
+                oldAnswers[usn] = answer;
+            }
+        }
     }
 }
 
@@ -223,14 +270,14 @@ volatile NSMutableDictionary *oldAnswers;
 }
 
 /**
- Broadcasts the SSDP M-SEARCH query. Transparently tries to open the socket and switch it into
+ Broadcasts the SSDP M-SEARCH request. Transparently tries to open the socket and switch it into
  broadcast mode, if not done, yet.
 
  Will send an error to the calling JavaScript, if this can not be achieved.
 
  @return YES on success, NO on error.
  */
-- (BOOL) broadcast:(NSString *)serviceType
+- (BOOL) broadcast
 {
     if ([self enableBroadcast])
     {
@@ -252,8 +299,8 @@ volatile NSMutableDictionary *oldAnswers;
     return NO;
 }
 /**
- Switches socket into listen mode with a 4 second timeout. Transparently tries to open the socket,
- if not done, yet.
+ Switches socket into listen mode with a given timeout (4 second default). Transparently tries to
+ open the socket, if not done, yet.
 
  Will send an error to the calling JavaScript, if this can not be achieved.
 
@@ -275,42 +322,52 @@ volatile NSMutableDictionary *oldAnswers;
 }
 
 /**
- Will listen 4 seconds for answers from SSDP servers.
+ Will listen for answers from SSDP servers. Transparently tries to open the socket and
+ switch it into listen mode, if not done, yet.
 
- Contrary to the other methods, you will have to call -enableListen yourself, so you are able to
- distinguish an error there from an empty answer.
+ When an answer was received, sends it immediately to the calling JavaScript.
 
- @return A dictionary keyed by received USNs containing dictionaries with all HTTP header responses
- received during that time.
-
- @see -enableListen
+ @return YES on success, NO on error.
  */
-- (NSMutableDictionary *)receive
+- (BOOL) receive
 {
-    struct sockaddr_in receiveSockaddr;
-    socklen_t receiveSockaddrLen = sizeof(receiveSockaddr);
-
-    void *buffer = malloc(bufferSize);
-
-    NSMutableDictionary *answers = [@{} mutableCopy];
-
-    // Keep listening till the socket timeout event occurs
-    while (callbackId)
+    if ([self enableListen])
     {
-        ssize_t length = recvfrom(sd, buffer, bufferSize, 0, (struct sockaddr *)&receiveSockaddr,
-                                  &receiveSockaddrLen);
-        // Timeout or no answers anymore.
-        if (length < 0)
+        void *buffer = malloc(bufferSize);
+
+        // Keep listening till the socket timeout event occurs and we have a callbackId.
+        while (callbackId)
         {
-            break;
+            ssize_t length = recv(sd, buffer, bufferSize, 0);
+
+            // Timeout.
+            if (length < 0)
+            {
+                break;
+            }
+
+            [self result:[ServiceDiscovery convert:buffer length:length
+                                  normalizeHeaders:normalizeHeaders]];
         }
 
-        [answers addEntriesFromDictionary:[self convert:buffer length:length]];
+        free(buffer);
+
+        return YES;
     }
 
-    free(buffer);
+    return NO;
+}
 
-    return answers;
+/**
+ Checks, if the socket is already closed, and if not, does close it.
+ */
+- (void) close
+{
+    if (sd > 0)
+    {
+        close(sd);
+        sd = 0;
+    }
 }
 
 /**
@@ -320,11 +377,14 @@ volatile NSMutableDictionary *oldAnswers;
  See https://de.wikipedia.org/wiki/Simple_Service_Discovery_Protocol for an example of an SSDP
  response.
 
+ Will capitalize headers, if requested to do so.
+
  @param bytes A byte buffer.
  @param length The length of valid data in the buffer.
- @return A dictionary with one key: "USN", containing another dictionary containing all headers.
+ @param normalizeHeaders If headers should be capitalized.
+ @return A dictionary containing all headers.
  */
-- (NSDictionary *)convert:(void *)bytes length:(NSUInteger)length
++ (NSDictionary *) convert:(void *)bytes length:(NSUInteger)length normalizeHeaders:(BOOL)normalizeHeaders
 {
     NSMutableDictionary *data = [@{} mutableCopy];
 
@@ -342,6 +402,11 @@ volatile NSMutableDictionary *oldAnswers;
             NSRange range = NSMakeRange(0, posOfFirstColon.location);
             NSString *key = [[line substringWithRange:range] stringByTrimmingCharactersInSet:white];
 
+            if (normalizeHeaders)
+            {
+                key = [key capitalizedString];
+            }
+
             range = NSMakeRange(posOfFirstColon.location + 1, [line length] - posOfFirstColon.location - 1);
             NSString *value = [[line substringWithRange:range] stringByTrimmingCharactersInSet:white];
 
@@ -349,24 +414,7 @@ volatile NSMutableDictionary *oldAnswers;
         }
     }
 
-    if (data[@"USN"])
-    {
-        return @{data[@"USN"]: data};
-    }
-
-    return nil;
-}
-
-/**
- Checks, if the socket is already closed, and if not, does close it.
- */
-- (void) close
-{
-    if (sd > 0)
-    {
-        close(sd);
-        sd = 0;
-    }
+    return data;
 }
 
 @end

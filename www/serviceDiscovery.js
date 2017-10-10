@@ -9,8 +9,8 @@ module.exports = {
      * This will continuously send out a SSDP "M-SEARCH" discovery request and then listen for answers
      * - basically forever or until the page is left or reloaded.
      *
-     * Your success callback will possibly receive multiple callbacks (each with a new set of
-     * server answers) until all available servers have answered.
+     * Your JavaScript success callback will receive multiple callbacks (each with a new server answer)
+     * until all available servers have answered.
      *
      * Different errors in networking can happen which will call the error callback argument.
      * Errors don't mean, that this plugin will stop listening. You have to explicitly
@@ -20,25 +20,40 @@ module.exports = {
      * caller will receive callbacks!
      *
      * @param {string} serviceType
-     *            A valid SSDP service type.
+     *            A valid SSDP service type. (e.g. "urn:schemas-upnp-org:service:ContentDirectory:1", "ssdp:all",
+     *            "urn:schemas-upnp-org:service:AVTransport:1")
      * @param {listenCallback} successCallback
      *            Callback to receive SSDP server answers.
      * @param {errorCallback} errorCallback
      *            Callback to receive error messages.
+     * @param {boolean=} normalizeHeaders
+     *            Set true, if you want capitalized headers. If false, headers will be passed unmodified (default).
+     * @param {number=} readTimeout
+     *            Read timeout in milliseconds. (DEFAULT: 4000) Will send a new "M-SEARCH" request after this time.
      */
-    listen: function (serviceType, successCallback, errorCallback) {
-        cordova.exec(successCallback, errorCallback, 'ServiceDiscovery', 'listen', [serviceType]);
+    listen: function (serviceType, successCallback, errorCallback, normalizeHeaders, readTimeout) {
+        var args = [serviceType];
+
+        if (typeof normalizeHeaders === 'boolean') {
+            args.push(normalizeHeaders);
+        }
+
+        if (typeof readTimeout === 'number') {
+            args.push(readTimeout);
+        }
+
+        cordova.exec(successCallback, errorCallback, 'ServiceDiscovery', 'listen', args);
     },
 
     /**
      * Stops listening for SSDP server discovery answers.
      *
      * You will immediately stop receiving updates to your listener. The background thread will be
-     * stopped within 4 seconds (the read timeout).
+     * stopped after read timeout. (4 seconds per default).
      *
      * It is safe to call this multiple times and before any call to {@link listen}.
      *
-     * @param {stopCallback} successCallback
+     * @param {stopCallback=} successCallback
      *            Callback to indicate successful execution.
      */
     stop: function (successCallback) {
@@ -46,12 +61,11 @@ module.exports = {
     }
 
     /**
-     * Callback for {@link listen}, containing SSDP server answers.
+     * Callback for {@link listen}, containing one SSDP server answer.
      *
      * @callback listenCallback
-     * @param {Object<string, Object<string, string>>} answers
-     *            A map of SSDP servers and their answers. The key is the USN, the map for each key contains the
-     *            returned headers per USN.
+     * @param {Object<string, string>} answer
+     *            A map of a SSDP server answer.
      */
 
     /**

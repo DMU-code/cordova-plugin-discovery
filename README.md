@@ -27,22 +27,35 @@ Edit `www/js/index.js` and add the following code inside `onDeviceReady`
 ```js
     var serviceType = "ssdp:all";
     
-    var success = function(devices) {
-        console.log(devices);
+    var success = function(device) {
+        console.log(device);
     };
     
     var failure = function(error) {
         alert("Error calling Service Discovery Plugin: " + error);
     };
     
+    var normalizeHeaders = true;
+    
+    var readTimeout = 4000;
+    
     /**
-	 * Similar to the W3C specification for Network Service Discovery api 'http://www.w3.org/TR/discovery-api/'
-	 * @method listen
-	 * @param {String} serviceType e.g. "urn:schemas-upnp-org:service:ContentDirectory:1", "ssdp:all", "urn:schemas-upnp-org:service:AVTransport:1"
-	 * @param {Function} success callback an object of services, indexed by their URNs.
-	 * @param {Function} failure callback 
-	*/
-    serviceDiscovery.listen(serviceType, success, failure);
+     * Similar to the W3C specification for Network Service Discovery api 'http://www.w3.org/TR/discovery-api/'
+     * 
+     * @method listen
+     * @param {string} serviceType
+     *            A valid SSDP service type. (e.g. "urn:schemas-upnp-org:service:ContentDirectory:1", "ssdp:all",
+     *            "urn:schemas-upnp-org:service:AVTransport:1")
+     * @param {listenCallback} successCallback
+     *            Callback to receive SSDP server answers.
+     * @param {errorCallback} errorCallback
+     *            Callback to receive error messages.
+     * @param {boolean=} normalizeHeaders
+     *            Set true, if you want capitalized headers. If false, headers will be passed unmodified (default).
+     * @param {number=} readTimeout
+     *            Read timeout in milliseconds. (DEFAULT: 4000) Will send a new "M-SEARCH" request after this time.
+     */
+    serviceDiscovery.listen(serviceType, success, failure, normalizeHeaders, readTimeout);
     
     setTimeout(
         function() {
@@ -63,3 +76,10 @@ Run the code
 ## Supported Platforms
 - Android
 - iOS
+
+## Authors
+- [Scott Dermott](http://sd-media.co.uk/)
+- [Benjamin Erhart](https://die.netzarchitekten.com)
+
+## Sponsors
+- [DMU GmbH](http://dmu-gmbh.at/)
