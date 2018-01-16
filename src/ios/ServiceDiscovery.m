@@ -10,6 +10,11 @@
 static NSString *ADDRESS = @"239.255.255.250";
 static NSInteger PORT = 1900;
 static size_t bufferSize = 9216;
+static NSString *TYPE = @"__TYPE__";
+static NSString *TYPE_MSEARCH = @"M-SEARCH";
+static NSString *TYPE_NOTIFY = @"NOTIFY";
+static NSString *TYPE_RESPONSE = @"RESPONSE";
+static NSString *TYPE_UNKNOWN = @"UNKNOWN";
 
 NSString * volatile callbackId;
 NSString * volatile serviceType;
@@ -174,8 +179,13 @@ volatile NSMutableDictionary *oldAnswers;
 
  @see -listen:
  */
-- (void) error:(NSString *)message
+- (void) error:(NSString *)format, ...
 {
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
     NSLog(@"ServiceDiscovery Error: %@", message);
 
     if (callbackId)
@@ -194,22 +204,51 @@ volatile NSMutableDictionary *oldAnswers;
 
  @param answer A dictionary containing the answer of an SSDP server.
  */
-- (void) result:(NSDictionary *)answer
+- (void) result:(NSMutableDictionary *)answer
 {
     if (callbackId && answer)
     {
+        NSString *type;
+        NSString *nt;
         NSString *usn;
 
         for (NSString *k in [answer allKeys]) {
-            if ([k caseInsensitiveCompare:@"USN"] == NSOrderedSame)
+            if ([k caseInsensitiveCompare:TYPE] == NSOrderedSame)
+            {
+                type = answer[k];
+            }
+            if ([k caseInsensitiveCompare:@"NT"] == NSOrderedSame)
+            {
+                nt = answer[k];
+            }
+            else if ([k caseInsensitiveCompare:@"USN"] == NSOrderedSame)
             {
                 usn = answer[k];
-                break;
             }
+        }
+
+        if ([type isEqualToString:TYPE_UNKNOWN])
+        {
+            // We don't understand this. Probably doesn't make sense.
+            return;
+        }
+
+        if ([type isEqualToString:TYPE_MSEARCH])
+        {
+            // We're not interested in M-SEARCH requests. (Probably our own, anyway.)
+            return;
+        }
+
+        if ([type isEqualToString:TYPE_NOTIFY] && ![nt isEqualToString:serviceType])
+        {
+            // That's strange stuff from devices we don't want - ignore.
+            return;
         }
 
         if (!usn || !oldAnswers[usn])
         {
+            [answer removeObjectForKey:TYPE];
+
             CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
                                        messageAsDictionary:answer];
             [result setKeepCallbackAsBool:YES];
@@ -238,7 +277,29 @@ volatile NSMutableDictionary *oldAnswers;
         sd = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (sd < 1)
         {
-            [self error:@"Socket creation failed!"];
+            [self error:@"Socket creation failed with error %d!", errno];
+            return NO;
+        }
+
+        // Set socket so address/port can be reused by others. We ignore any errors, though, since
+        // experiments have shown, that it will work either way. Anyway, we want to be a good
+        // citizen. See the following link for explanations:
+        // https://stackoverflow.com/questions/14388706/socket-options-so-reuseaddr-and-so-reuseport-how-do-they-differ-do-they-mean-t
+        int flag = 1;
+        setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
+        setsockopt(sd, SOL_SOCKET, SO_REUSEPORT, &flag, sizeof(flag));
+
+        // Bind to all interfaces on port 1900, so we can receive unsolicited SSDP packets, also,
+        // not just the ones we receive as answer to our M-SEARCH.
+        struct sockaddr_in sin;
+        memset(&sin, 0, sizeof(sin));
+        sin.sin_family = AF_INET;
+        sin.sin_addr.s_addr = htonl(INADDR_ANY);
+        sin.sin_port = htons(PORT);
+
+        if (bind(sd, (struct sockaddr *)&sin, sizeof(sin))) {
+            [self close];
+            [self error:@"Socket bind failed with error %d!", errno];
             return NO;
         }
     }
@@ -263,7 +324,7 @@ volatile NSMutableDictionary *oldAnswers;
             return YES;
         }
 
-        [self error:@"Could not enable broadcast on socket!"];
+        [self error:@"Could not enable broadcast on socket due to error %d!", errno];
     }
 
     return NO;
@@ -288,12 +349,12 @@ volatile NSMutableDictionary *oldAnswers;
                                UTF8String];
 
         if (sendto(sd, request, strlen(request), 0, (struct sockaddr*)&broadcastAddr,
-                   sizeof broadcastAddr) >= 0)
+                   sizeof(broadcastAddr)) >= 0)
         {
             return YES;
         }
 
-        [self error:@"Could not send broadcast!"];
+        [self error:@"Could not send broadcast due to error %d!", errno];
     }
 
     return NO;
@@ -310,12 +371,24 @@ volatile NSMutableDictionary *oldAnswers;
 {
     if ([self open])
     {
+        // Try to add ourselves to the SSDP multicast group, so we can receive unsolicited
+        // NOTIFYs, also. For an unknown reason, IP_ADD_MEMBERSHIP always returns errno 48
+        // (EADDRINUSE), but it will work anyway. If really not, we will still be able to
+        // receive answers to our M-SEARCH broadcast, so we ignore any errors here.
+        // See the following for deeper explanantions:
+        // http://openbook.rheinwerk-verlag.de/linux_unix_programmierung/Kap11-018.htm#RxxKap11018040003971F01A100
+        struct ip_mreq mreq;
+        memset(&mreq, 0, sizeof(mreq));
+        mreq.imr_multiaddr = broadcastAddr.sin_addr;
+        mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+        setsockopt(sd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+
         if (!setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)))
         {
             return YES;
         }
 
-        [self error:@"Could not enable listening on socket!"];
+        [self error:@"Could not enable listening on socket due to error %d!", errno];
     }
 
     return NO;
@@ -384,7 +457,7 @@ volatile NSMutableDictionary *oldAnswers;
  @param normalizeHeaders If headers should be capitalized.
  @return A dictionary containing all headers.
  */
-+ (NSDictionary *) convert:(void *)bytes length:(NSUInteger)length normalizeHeaders:(BOOL)normalizeHeaders
++ (NSMutableDictionary *) convert:(void *)bytes length:(NSUInteger)length normalizeHeaders:(BOOL)normalizeHeaders
 {
     NSMutableDictionary *data = [@{} mutableCopy];
 
@@ -397,8 +470,33 @@ volatile NSMutableDictionary *oldAnswers;
     for (NSString *line in lines) {
         NSRange posOfFirstColon = [line rangeOfString:@":"];
 
-        if (posOfFirstColon.location != NSNotFound)
+        if (posOfFirstColon.location == NSNotFound)
         {
+            if ([[line stringByTrimmingCharactersInSet:white] length] < 1)
+            {
+                continue;
+            }
+
+            // Must be the first line containing the HTTP request verb or response header.
+            NSString *header = [line uppercaseString];
+
+            if ([header containsString:@"M-SEARCH"])
+            {
+                data[TYPE] = TYPE_MSEARCH;
+            }
+            else if ([header containsString:@"NOTIFY"])
+            {
+                data[TYPE] = TYPE_NOTIFY;
+            }
+            else if ([header containsString:@"OK"])
+            {
+                data[TYPE] = TYPE_RESPONSE;
+            }
+            else {
+                data[TYPE] = TYPE_UNKNOWN;
+            }
+        }
+        else {
             NSRange range = NSMakeRange(0, posOfFirstColon.location);
             NSString *key = [[line substringWithRange:range] stringByTrimmingCharactersInSet:white];
 
