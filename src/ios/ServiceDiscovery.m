@@ -18,6 +18,8 @@ static NSString *TYPE_UNKNOWN = @"UNKNOWN";
 
 NSString * volatile callbackId;
 NSString * volatile serviceType;
+BOOL broadcastMsearch = true;
+BOOL listenForNotifies;
 BOOL normalizeHeaders;
 struct timeval timeout;
 int sd;
@@ -93,14 +95,17 @@ volatile NSMutableDictionary *oldAnswers;
         return;
     }
 
-    normalizeHeaders = command.arguments.count > 1 && [command.arguments[1] boolValue];
+    broadcastMsearch = [command.arguments[1] boolValue];
+    listenForNotifies = [command.arguments[2] boolValue];
+
+    normalizeHeaders = command.arguments.count > 3 && [command.arguments[3] boolValue];
 
     // Remove old answers, so we can give back everything again to the new listener.
     [oldAnswers removeAllObjects];
 
-    if (command.arguments.count > 2)
+    if (command.arguments.count > 4)
     {
-        NSInteger to = [command.arguments[2] integerValue];
+        NSInteger to = [command.arguments[4] integerValue];
         timeout.tv_sec = to / 1000;
         timeout.tv_usec = (to % 1000) /* rest */ * 1000 /* microseconds */;
     }
@@ -110,8 +115,11 @@ volatile NSMutableDictionary *oldAnswers;
         timeout.tv_usec = 0;
     }
 
-    NSLog(@"ServiceDiscovery#listen {serviceType=\"%@\", normalizeHeaders=%@, timeout=%ld, backgroundThreadActive=%@}",
-          serviceType, normalizeHeaders ? @"YES" : @"NO",
+    NSLog(@"ServiceDiscovery#listen {serviceType=\"%@\", broadcastMsearch=%@, listenForNotifies=%@, normalizeHeaders=%@, timeout=%ld, backgroundThreadActive=%@}",
+          serviceType,
+          broadcastMsearch ? @"YES" : @"NO",
+          listenForNotifies ? @"YES" : @"NO",
+          normalizeHeaders ? @"YES" : @"NO",
           (timeout.tv_sec * 1000000 + timeout.tv_usec) / 1000,
           backgroundThreadActive ? @"YES" : @"NO");
 
@@ -126,12 +134,9 @@ volatile NSMutableDictionary *oldAnswers;
 
         while (callbackId)
         {
-            if (![self broadcast])
+            if (broadcastMsearch)
             {
-                // Keep loop frequency below 1/s.
-                [NSThread sleepForTimeInterval:1];
-
-                continue;
+                [self broadcast];
             }
 
             if (![self receive])
@@ -217,7 +222,7 @@ volatile NSMutableDictionary *oldAnswers;
             {
                 type = answer[k];
             }
-            if ([k caseInsensitiveCompare:@"NT"] == NSOrderedSame)
+            else if ([k caseInsensitiveCompare:@"NT"] == NSOrderedSame)
             {
                 nt = answer[k];
             }
@@ -239,7 +244,9 @@ volatile NSMutableDictionary *oldAnswers;
             return;
         }
 
-        if ([type isEqualToString:TYPE_NOTIFY] && ![nt isEqualToString:serviceType])
+        if ([type isEqualToString:TYPE_NOTIFY] && (
+           !listenForNotifies ||
+           (![@"ssdp:all" isEqualToString:serviceType] && ![nt isEqualToString:serviceType])))
         {
             // That's strange stuff from devices we don't want - ignore.
             return;

@@ -1,5 +1,7 @@
 package com.scott.plugin;
 
+import android.content.Context;
+import android.net.wifi.WifiManager;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -29,6 +31,11 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
     private static final String ADDRESS = "239.255.255.250";
     private static final int PORT = 1900;
     private static final int RECEIVE_PACKET_SIZE = 9216;
+    private static final String TYPE = "__TYPE__";
+    private static final String TYPE_MSEARCH = "M-SEARCH";
+    private static final String TYPE_NOTIFY = "NOTIFY";
+    private static final String TYPE_RESPONSE = "RESPONSE";
+    private static final String TYPE_UNKNOWN = "UNKNOWN";
     private static final String REQUEST = String.format(Locale.US, "M-SEARCH * HTTP/1.1\r\n" +
         "HOST: %s:%d\r\n" +
         "MAN: \"ssdp:discover\"\r\n" +
@@ -37,13 +44,28 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
 
     volatile private CallbackContext mCallbackContext;
     volatile private String mServiceType;
+    volatile private boolean mBroadcastMsearch = true;
+    volatile private boolean mListenForNotifies;
     volatile private boolean mNormalizeHeaders;
     volatile private int mTimeout = 4000;
     volatile private boolean mBackgroundThreadActive;
     volatile private JSONObject mOldAnswers = new JSONObject();
     private static InetAddress sGroup;
     private MulticastSocket mMcs;
+    private WifiManager.MulticastLock mMulticastLock;
 
+
+    /**
+     * Called after plugin construction and fields have been initialized.
+     */
+    protected void pluginInitialize() {
+        super.pluginInitialize();
+
+        WifiManager wm = (WifiManager) cordova.getActivity().getApplicationContext()
+            .getSystemService(Context.WIFI_SERVICE);
+
+        if (wm != null) mMulticastLock = wm.createMulticastLock("SERVICE_DISCOVERY_LOCK");
+    }
 
     /**
      * <p>
@@ -108,18 +130,22 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
         if (action.equals("listen")) {
             mCallbackContext = callbackContext;
             mServiceType = args.getString(0);
+            mBroadcastMsearch = args.optBoolean(1, true);
+            mListenForNotifies = args.optBoolean(2, false);
 
-            mNormalizeHeaders = args.optBoolean(1, false);
+            mNormalizeHeaders = args.optBoolean(3, false);
 
             // Remove old answers, so we can give back everything again to the new listener.
             mOldAnswers = new JSONObject();
 
             // set default read timeout to 4 seconds.
-            mTimeout = args.optInt(2, 4000);
+            mTimeout = args.optInt(4, 4000);
 
             Log.i("ServiceDiscovery", String.format("#listen {mServiceType=\"%s\", "
+                    + "mBroadcastMsearch=%b, mListenForNotifies=%b, "
                     + "mNormalizeHeaders=%b, mTimeout=%d, mBackgroundThreadActive=%b}",
-                mServiceType, mNormalizeHeaders, mTimeout, mBackgroundThreadActive));
+                mServiceType, mBroadcastMsearch, mListenForNotifies, mNormalizeHeaders, mTimeout,
+                mBackgroundThreadActive));
 
             if (!mBackgroundThreadActive) cordova.getThreadPool().execute(this);
 
@@ -165,7 +191,7 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
 
         while (mCallbackContext != null) {
             try {
-                broadcast();
+                if (mBroadcastMsearch) broadcast();
 
                 receive();
             } catch (IOException e) {
@@ -198,6 +224,8 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
      */
     private void result(JSONObject answer) {
         if (mCallbackContext != null && answer != null) {
+            String type = null;
+            String nt = null;
             String usn = null;
 
             Iterator<String> i = answer.keys();
@@ -205,14 +233,40 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
             while (i.hasNext()) {
                 String key = i.next();
 
-                if (key.compareToIgnoreCase("USN") == 0) {
+                if (key.compareToIgnoreCase(TYPE) == 0) {
+                    type = answer.optString(key, null);
+                }
+                else if (key.compareToIgnoreCase("NT") == 0) {
+                    nt = answer.optString(key, null);
+                }
+                else if (key.compareToIgnoreCase("USN") == 0) {
                     usn = answer.optString(key, null);
                     break;
                 }
             }
 
+            if (TYPE_UNKNOWN.equals(type)) {
+                // We don't understand this. Probably doesn't make sense.
+                return;
+            }
+
+            if (TYPE_MSEARCH.equals(type)) {
+                // We're not interested in M-SEARCH requests. (Probably our own, anyway.)
+                return;
+            }
+
+            if (TYPE_NOTIFY.equals(type) && (
+                !mListenForNotifies ||
+                (!"ssdp:all".equals(mServiceType) && !mServiceType.equals(nt))
+            )) {
+                // That's strange stuff from devices we don't want - ignore.
+                return;
+            }
+
             if (usn == null || !mOldAnswers.has(usn))
             {
+                answer.remove(TYPE);
+
                 PluginResult result = new PluginResult(PluginResult.Status.OK, answer);
                 result.setKeepCallback(true);
                 mCallbackContext.sendPluginResult(result);
@@ -241,9 +295,10 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
         }
 
         if (mMcs == null) {
-            mMcs = new MulticastSocket(null);
+            mMcs = new MulticastSocket(PORT);
             mMcs.joinGroup(sGroup);
             mMcs.setTimeToLive(4);
+            mMcs.setBroadcast(true);
         }
 
         mMcs.setSoTimeout(mTimeout);
@@ -276,6 +331,8 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
     private void receive() throws IOException {
         open();
 
+        if (mMulticastLock != null) mMulticastLock.acquire();
+
         while (mCallbackContext != null) {
             try {
                 byte[] data = new byte[RECEIVE_PACKET_SIZE];
@@ -286,6 +343,8 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
                 break;
             }
         }
+
+        if (mMulticastLock != null) mMulticastLock.release();
     }
 
     /**
@@ -331,9 +390,28 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
             String answer = new String(data, "UTF-8").trim();
 
             for (String line : answer.split("\r")) {
-                String parts[] = line.split(":");
+                if (!line.contains(":")) {
+                    if (line.trim().length() < 1) continue;
 
-                if (parts.length > 1) {
+                    String header = line.toUpperCase(Locale.US);
+
+                    try {
+                        if (header.contains("M-SEARCH")) {
+                            headers.put(TYPE, TYPE_MSEARCH);
+                        } else if (header.contains("NOTIFY")) {
+                            headers.put(TYPE, TYPE_NOTIFY);
+                        } else if (header.contains("OK")) {
+                            headers.put(TYPE, TYPE_RESPONSE);
+                        } else {
+                            headers.put(TYPE, TYPE_UNKNOWN);
+                        }
+                    } catch (JSONException e) {
+                        // This should not happen.
+                        e.printStackTrace();
+                    }
+                }
+                else {
+                    String parts[] = line.split(":");
                     StringBuilder value = new StringBuilder();
 
                     for (int i = 1; i < parts.length; i++) {
