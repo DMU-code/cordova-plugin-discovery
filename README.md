@@ -39,6 +39,10 @@ Edit `www/js/index.js` and add the following code inside `onDeviceReady`
     
     var readTimeout = 4000;
     
+    var listenForNotifies = true;
+    
+    var broadcastMsearch = true;
+    
     /**
      * Similar to the W3C specification for Network Service Discovery api 'http://www.w3.org/TR/discovery-api/'
      * 
@@ -54,8 +58,17 @@ Edit `www/js/index.js` and add the following code inside `onDeviceReady`
      *            Set true, if you want capitalized headers. If false, headers will be passed unmodified (default).
      * @param {number=} readTimeout
      *            Read timeout in milliseconds. (DEFAULT: 4000) Will send a new "M-SEARCH" request after this time.
+     * @param {boolean=} listenForNotifies
+     *            Listen for unsolicited NOTIFY messages. (DEFAULT: false) If this is enabled, you will also receive
+     *            NOTIFY messages which match the <b>exact</b> serviceType you provided, or <b>all</b>, if you used
+     *            "ssdp:all".
+     *            <b>ATTENTION</b>: The content of NOTIFY messages is slightly different than answers to M-SEARCH
+     *            messages!
+     * @param {boolean=} broadcastMsearch
+     *            Send M-SEARCH messages and get all responses to it. (DEFAULT: true) This is the original behaviour
+     *            of this plugin which can now be switched off to just listen passively.
      */
-    serviceDiscovery.listen(serviceType, success, failure, normalizeHeaders, readTimeout);
+    serviceDiscovery.listen(serviceType, success, failure, normalizeHeaders, readTimeout, listenForNotifies, broadcastMsearch);
     
     setTimeout(
         function() {

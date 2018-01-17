@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <plugin xmlns="http://www.phonegap.com/ns/plugins/1.0"
         id="com.scott.serviceDiscovery"
-        version="1.0.1">
+        version="1.1.0">
 
   <name>serviceDiscovery</name>
 
@@ -23,6 +23,10 @@
       <feature name="ServiceDiscovery">
         <param name="android-package" value="com.scott.plugin.ServiceDiscovery"/>
       </feature>
+    </config-file>
+
+    <config-file target="AndroidManifest.xml" parent="/*">
+      <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     </config-file>
 
     <source-file src="src/android/ServiceDiscovery.java" target-dir="src/com/scott/plugin/"/>
