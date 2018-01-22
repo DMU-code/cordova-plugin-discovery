@@ -30,9 +30,23 @@ module.exports = {
      *            Set true, if you want capitalized headers. If false, headers will be passed unmodified (default).
      * @param {number=} readTimeout
      *            Read timeout in milliseconds. (DEFAULT: 4000) Will send a new "M-SEARCH" request after this time.
+     * @param {boolean=} listenForNotifies
+     *            Listen for unsolicited NOTIFY messages. (DEFAULT: false) If this is enabled, you will also receive
+     *            NOTIFY messages which match the <b>exact</b> serviceType you provided, or <b>all</b>, if you used
+     *            "ssdp:all".
+     *            <b>ATTENTION</b>: The content of NOTIFY messages is slightly different than answers to M-SEARCH
+     *            messages!
+     * @param {boolean=} broadcastMsearch
+     *            Send M-SEARCH messages and get all responses to it. (DEFAULT: true) This is the original behaviour
+     *            of this plugin which can now be switched off to just listen passively.
      */
-    listen: function (serviceType, successCallback, errorCallback, normalizeHeaders, readTimeout) {
+    listen: function (serviceType, successCallback, errorCallback, normalizeHeaders, readTimeout, listenForNotifies,
+                      broadcastMsearch) {
         var args = [serviceType];
+
+        args.push(typeof broadcastMsearch === 'boolean' ? broadcastMsearch : true);
+
+        args.push(typeof listenForNotifies === 'boolean' && listenForNotifies);
 
         if (typeof normalizeHeaders === 'boolean') {
             args.push(normalizeHeaders);
