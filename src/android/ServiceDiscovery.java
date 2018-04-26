@@ -302,14 +302,12 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
      * @throws IOException if an I/O exception occurs while opening the {@link MulticastSocket}.
      */
     private void open() throws IOException {
-        if (localInetAddress == null) {
-            WifiManager wifiMgr = (WifiManager) cordova.getActivity().getApplicationContext()
-                    .getSystemService(Context.WIFI_SERVICE);
-            WifiInfo wifiInfo = wifiMgr.getConnectionInfo();
-            int ip = wifiInfo.getIpAddress();
-            byte[] ipAddress = convertIpAddressToString(ip);
-            localInetAddress = InetAddress.getByAddress(ipAddress);
-        }
+        WifiManager wifiMgr = (WifiManager) cordova.getActivity().getApplicationContext()
+                .getSystemService(Context.WIFI_SERVICE);
+        WifiInfo wifiInfo = wifiMgr.getConnectionInfo();
+        int ip = wifiInfo.getIpAddress();
+        byte[] ipAddress = convertIpAddressToString(ip);
+        localInetAddress = InetAddress.getByAddress(ipAddress);
 
         if (multicastSocket == null) {
             multicastGroup = new InetSocketAddress(MULTICAST_ADDRESS, MULTICAST_PORT);
