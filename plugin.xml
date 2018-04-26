@@ -27,6 +27,7 @@
 
     <config-file target="AndroidManifest.xml" parent="/*">
       <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+      <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     </config-file>
 
     <source-file src="src/android/ServiceDiscovery.java" target-dir="src/com/scott/plugin/"/>

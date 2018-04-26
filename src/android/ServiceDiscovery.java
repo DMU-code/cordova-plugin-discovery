@@ -1,6 +1,7 @@
 package com.scott.plugin;
 
 import android.content.Context;
+import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.text.TextUtils;
 import android.util.Log;
@@ -15,8 +16,12 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
+import java.net.NetworkInterface;
+import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.util.Iterator;
 import java.util.Locale;
@@ -28,19 +33,23 @@ import java.util.Locale;
  */
 public class ServiceDiscovery extends CordovaPlugin implements Runnable {
 
-    private static final String ADDRESS = "239.255.255.250";
-    private static final int PORT = 1900;
+    private static final String MULTICAST_ADDRESS = "239.255.255.250";
+    private static final int MULTICAST_PORT = 1900;
     private static final int RECEIVE_PACKET_SIZE = 9216;
     private static final String TYPE = "__TYPE__";
     private static final String TYPE_MSEARCH = "M-SEARCH";
     private static final String TYPE_NOTIFY = "NOTIFY";
     private static final String TYPE_RESPONSE = "RESPONSE";
     private static final String TYPE_UNKNOWN = "UNKNOWN";
-    private static final String REQUEST = String.format(Locale.US, "M-SEARCH * HTTP/1.1\r\n" +
+
+    private static final String REQUEST = String.format(Locale.US,
+        "M-SEARCH * HTTP/1.1\r\n" +
         "HOST: %s:%d\r\n" +
         "MAN: \"ssdp:discover\"\r\n" +
-        "ST: %s\r\nMX: 2\r\n" +
-        "\r\n", ADDRESS, PORT, "%s");
+        "ST: %s\r\n" +
+        "MX: 2\r\n" +
+        "\r\n", MULTICAST_ADDRESS, MULTICAST_PORT, "%s"
+    );
 
     volatile private CallbackContext mCallbackContext;
     volatile private String mServiceType;
@@ -50,9 +59,11 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
     volatile private int mTimeout = 4000;
     volatile private boolean mBackgroundThreadActive;
     volatile private JSONObject mOldAnswers = new JSONObject();
-    private static InetAddress sGroup;
-    private MulticastSocket mMcs;
+    private static InetAddress localInetAddress;
+    private MulticastSocket multicastSocket;
     private WifiManager.MulticastLock mMulticastLock;
+    private DatagramSocket datagramSocket;
+    private SocketAddress multicastGroup;
 
 
     /**
@@ -283,6 +294,7 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
         }
     }
 
+
     /**
      * Checks, if a {@link MulticastSocket} is already opened, and if not, does open and configure
      * it.
@@ -290,18 +302,26 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
      * @throws IOException if an I/O exception occurs while opening the {@link MulticastSocket}.
      */
     private void open() throws IOException {
-        if (sGroup == null) {
-            sGroup = InetAddress.getByName(ADDRESS);
+        WifiManager wifiMgr = (WifiManager) cordova.getActivity().getApplicationContext()
+                .getSystemService(Context.WIFI_SERVICE);
+        WifiInfo wifiInfo = wifiMgr.getConnectionInfo();
+        int ip = wifiInfo.getIpAddress();
+        byte[] ipAddress = convertIpAddressToString(ip);
+        localInetAddress = InetAddress.getByAddress(ipAddress);
+
+        if (multicastSocket == null) {
+            multicastGroup = new InetSocketAddress(MULTICAST_ADDRESS, MULTICAST_PORT);
+            NetworkInterface networkInterface = NetworkInterface.getByInetAddress(localInetAddress);
+
+            multicastSocket = new MulticastSocket(MULTICAST_PORT);
+            multicastSocket.joinGroup(multicastGroup, networkInterface);
+
+            datagramSocket = new DatagramSocket(null);
+            datagramSocket.setReuseAddress(true);
+            datagramSocket.bind(new InetSocketAddress(localInetAddress, 0));
         }
 
-        if (mMcs == null) {
-            mMcs = new MulticastSocket(PORT);
-            mMcs.joinGroup(sGroup);
-            mMcs.setTimeToLive(4);
-            mMcs.setBroadcast(true);
-        }
-
-        mMcs.setSoTimeout(mTimeout);
+        datagramSocket.setSoTimeout(mTimeout);
     }
 
     /**
@@ -314,7 +334,8 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
         open();
 
         byte[] request = String.format(Locale.US, REQUEST, mServiceType).getBytes();
-        mMcs.send(new DatagramPacket(request, request.length, sGroup, PORT));
+        datagramSocket.send(new DatagramPacket(request, request.length, multicastGroup));
+
     }
 
     /**
@@ -336,7 +357,7 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
         while (mCallbackContext != null) {
             try {
                 byte[] data = new byte[RECEIVE_PACKET_SIZE];
-                mMcs.receive(new DatagramPacket(data, data.length));
+                datagramSocket.receive(new DatagramPacket(data, data.length));
 
                 result(convert(data, mNormalizeHeaders));
             } catch (SocketTimeoutException e) {
@@ -351,17 +372,20 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
      *  Checks, if the {@link MulticastSocket} is already closed, and if not, does close it.
      */
     private void close() {
-        if (mMcs != null) {
-            if (sGroup != null) {
+        if (multicastSocket != null) {
+            if (localInetAddress != null) {
                 try {
-                    mMcs.leaveGroup(sGroup);
+                    multicastSocket.leaveGroup(localInetAddress);
                 } catch (IOException e) {
                     // Ignore, closing anyway.
                 }
             }
 
-            mMcs.close();
-            mMcs = null;
+            multicastSocket.close();
+            multicastSocket = null;
+
+            datagramSocket.close();
+            datagramSocket = null;
         }
     }
 
@@ -459,4 +483,19 @@ public class ServiceDiscovery extends CordovaPlugin implements Runnable {
 
         return TextUtils.join("-", parts);
     }
+
+    /**
+     * Converts ip's int notation to string notation
+     *
+     * @param ip
+     * @return
+     */
+    private static byte[] convertIpAddressToString(int ip) {
+        return new byte[] {
+                (byte) (ip & 0xFF),
+                (byte) ((ip >> 8) & 0xFF),
+                (byte) ((ip >> 16) & 0xFF),
+                (byte) ((ip >> 24) & 0xFF)};
+    }
+
 }
